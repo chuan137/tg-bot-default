@@ -1,4 +1,7 @@
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 import db
@@ -24,6 +27,30 @@ _ALL_HANDLERS = {
 }
 
 
+class _UIHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/stats":
+            body = (
+                b"<p>This is a test sentence from the default bot UI panel.</p>"
+                b"<p style='color:var(--pico-muted-color);font-size:0.85em'>"
+                b"Bot is running ✓</p>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def _start_ui_server():
+    HTTPServer(("0.0.0.0", 8080), _UIHandler).serve_forever()
+
+
 async def post_init(app):
     cmds = [BotCommand(c, desc) for c, (_, desc) in _ALL_HANDLERS.items()]
     for scope in (BotCommandScopeAllPrivateChats(), BotCommandScopeAllGroupChats()):
@@ -37,6 +64,8 @@ async def scheduled_summary(context):
 
 def main():
     db.init_db()
+    threading.Thread(target=_start_ui_server, daemon=True).start()
+    logger.info("UI server listening on :8080")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
