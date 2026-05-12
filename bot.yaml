@@ -1,0 +1,17 @@
+commands:
+  - name: todo
+    description: Add a to-do item
+  - name: list
+    description: Show open to-dos
+  - name: done
+    description: Mark to-do done
+  - name: del
+    description: Delete a to-do
+  - name: note
+    description: Save a note
+  - name: important
+    description: Save an important note
+  - name: pinned
+    description: Show important notes
+  - name: summary
+    description: Send summary now

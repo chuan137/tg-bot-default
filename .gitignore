@@ -1,0 +1,7 @@
+.env
+*.db
+__pycache__/
+*.pyc
+build.log
+bot.pid
+bot.log
