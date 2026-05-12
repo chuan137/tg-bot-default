@@ -31,10 +31,10 @@ class _UIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/stats":
             body = (
-                b"<p>This is a test sentence from the default bot UI panel.</p>"
-                b"<p style='color:var(--pico-muted-color);font-size:0.85em'>"
-                b"Bot is running ✓</p>"
-            )
+                "<p>This is a test sentence from the default bot UI panel.</p>"
+                "<p style='color:var(--pico-muted-color);font-size:0.85em'>"
+                "Bot is running ✓</p>"
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
