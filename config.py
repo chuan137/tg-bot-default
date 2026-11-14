@@ -13,3 +13,7 @@ AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.openai.com/v1")
 AI_API_KEY = os.getenv("AI_API_KEY", "")
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 AI_SYSTEM_PROMPT = os.getenv("AI_SYSTEM_PROMPT", "You are a helpful assistant. Answer clearly and concisely.")
+
+CLAUDE_RUNNER_URL = os.getenv("CLAUDE_RUNNER_URL", "").rstrip("/")
+CLAUDE_RUNNER_SECRET = os.getenv("CLAUDE_RUNNER_SECRET", "")
+CLAUDE_RUNNER_TIMEOUT = int(os.getenv("CLAUDE_RUNNER_TIMEOUT", "400"))

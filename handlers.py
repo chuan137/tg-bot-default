@@ -1,8 +1,12 @@
+import asyncio
+import contextlib
+from collections import OrderedDict
 from datetime import datetime
+import httpx
 from telegram import Update
 from telegram.ext import ContextTypes
 import db
-from config import OWNER_CHAT_ID, AI_ENABLED, AI_BASE_URL, AI_API_KEY, AI_MODEL, AI_SYSTEM_PROMPT
+from config import OWNER_CHAT_ID, AI_ENABLED, AI_BASE_URL, AI_API_KEY, AI_MODEL, AI_SYSTEM_PROMPT, CLAUDE_RUNNER_URL, CLAUDE_RUNNER_SECRET, CLAUDE_RUNNER_TIMEOUT
 
 if AI_ENABLED and AI_API_KEY:
     from openai import AsyncOpenAI
@@ -20,6 +24,98 @@ async def _ai_reply(text: str) -> str:
         ],
     )
     return resp.choices[0].message.content
+
+
+# --- optional Claude runner (enabled only when CLAUDE_RUNNER_URL is set) ---
+RUNNER_ENABLED = bool(CLAUDE_RUNNER_URL and CLAUDE_RUNNER_SECRET)
+_THREAD_ROOTS: "OrderedDict[tuple, int]" = OrderedDict()  # (chat_id, message_id) -> root message id
+_ROOTS_MAX = 5000
+
+
+def _remember_root(chat_id: int, message_id: int, root: int):
+    _THREAD_ROOTS[(chat_id, message_id)] = root
+    _THREAD_ROOTS.move_to_end((chat_id, message_id))
+    while len(_THREAD_ROOTS) > _ROOTS_MAX:
+        _THREAD_ROOTS.popitem(last=False)
+
+
+def _thread_root(message) -> int:
+    """Root message id of the reply chain this message belongs to."""
+    chat_id = message.chat_id
+    parent = message.reply_to_message
+    if parent is None:
+        root = message.message_id
+    else:
+        root = _THREAD_ROOTS.get((chat_id, parent.message_id))
+        if root is None:
+            grand = parent.reply_to_message
+            root = grand.message_id if grand is not None else parent.message_id
+    _remember_root(chat_id, message.message_id, root)
+    return root
+
+
+def _split(text: str, limit: int = 4096):
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        parts.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    if text or not parts:
+        parts.append(text)
+    return parts
+
+
+async def _runner_post(path: str, payload: dict) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=CLAUDE_RUNNER_TIMEOUT) as client:
+        return await client.post(
+            CLAUDE_RUNNER_URL + path, json=payload,
+            headers={"X-Runner-Secret": CLAUDE_RUNNER_SECRET},
+        )
+
+
+async def _typing(chat, thread_id):
+    while True:
+        with contextlib.suppress(Exception):
+            await chat.send_action("typing", message_thread_id=thread_id)
+        await asyncio.sleep(4)
+
+
+async def _runner_answer(update: Update, text: str) -> str:
+    msg = update.message
+    chat = update.effective_chat
+    user = update.effective_user
+    payload = {
+        "chat_id": chat.id,
+        "thread_root_id": _thread_root(msg),
+        "user": user.full_name or user.username or str(user.id),
+        "chat_title": chat.title or chat.full_name or str(chat.id),
+        "question": text,
+    }
+    typing = asyncio.create_task(_typing(chat, msg.message_thread_id if chat.is_forum else None))
+    try:
+        r = await _runner_post("/ask", payload)
+        try:
+            body = r.json()
+        except ValueError:
+            body = {}
+        if r.status_code == 200 and body.get("answer"):
+            return body["answer"]
+        return "Error: " + str(body.get("error") or f"runner returned HTTP {r.status_code}")
+    except httpx.TimeoutException:
+        return "Error: the runner did not answer in time"
+    except Exception as exc:
+        return f"Error: runner unreachable ({type(exc).__name__})"
+    finally:
+        typing.cancel()
+
+
+async def _reply_split(update: Update, text: str):
+    for part in _split(text):
+        sent = await update.message.reply_text(part)
+        _remember_root(update.effective_chat.id, sent.message_id,
+                       _THREAD_ROOTS.get((update.effective_chat.id, update.message.message_id), update.message.message_id))
 
 
 def admin_or_owner(func):
@@ -147,6 +243,27 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @admin_or_owner
+async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not RUNNER_ENABLED:
+        return
+    chat = update.effective_chat
+    payload = {"chat_id": chat.id}
+    msg = update.message
+    if chat.type != "private" and msg.reply_to_message is not None:
+        payload["thread_root_id"] = _thread_root(msg)
+    try:
+        r = await _runner_post("/reset", payload)
+        r.raise_for_status()
+    except Exception as exc:
+        await msg.reply_text(f"Error: could not reset ({type(exc).__name__})")
+        return
+    if chat.type != "private" and "thread_root_id" not in payload:
+        await msg.reply_text("Context cleared for all threads in this chat. (Reply with /new to a thread to clear only that one.)")
+    else:
+        await msg.reply_text("Context cleared. Starting a new conversation.")
+
+
+@admin_or_owner
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     text = update.message.text or ""
@@ -155,6 +272,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mention = f"@{context.bot.username}"
         if mention not in text:
             return
+
+    if RUNNER_ENABLED:
+        await _reply_split(update, await _runner_answer(update, text))
+        return
 
     if _ai_client:
         reply = await _ai_reply(text)

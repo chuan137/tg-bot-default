@@ -47,6 +47,10 @@ class _UIHandler(BaseHTTPRequestHandler):
         pass
 
 
+if handlers.RUNNER_ENABLED:
+    _ALL_HANDLERS["new"] = (handlers.cmd_new, "Start a new conversation (clear context)")
+
+
 def _start_ui_server():
     HTTPServer(("0.0.0.0", 8080), _UIHandler).serve_forever()
 
